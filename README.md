@@ -1,14 +1,15 @@
 #!/usr/bin/env -S runghc --ghc-arg=-x --ghc-arg=lhs
 
-Gopherspace RPG (GRPG): Surf Gopherspace + MMORPG
-=================================================
+Gopherspace (mmo)RPG (GRPG): Surf Gopherspace + MMORPG
+======================================================
 
 Multiplayer RPG game where you literally surf the Internet Gopher Protocol. When
 you find a place in gopherspace nobody has been to before you get loot.
 
 A single Literate Haskell script you can add to your gopherhole. I like to
 think of this format as a `gopherapplet` (annoying caveat: prose lines cannot
-begin with `#`).
+begin with `#`, [read more about this #
+bug](https://www.extrema.is/blog/2023/03/21/literate-haskell-markdown-headings)).
 
 Active on [someodd's gopherhole](gopher://gopher.someodd.zip/).
 
@@ -56,6 +57,14 @@ Then, configure it to work with a Gopher daemon, like with
     search    = true
     command   = "/var/gopher/output/grpg"
     arguments = ["$wildcard", "$search"]
+
+If you want to run tests (the "interactive" examples herein) install `doctest`:
+
+    cabal install doctest --overwrite-policy=always
+
+Then you can:
+
+    doctest README.md
 
 Example CLI commands
 --------------------
@@ -284,6 +293,9 @@ Small, reusable helpers
 Parse helpers: URIs, wildcards, legacy forms
 ============================================
 
+This section primarily has to do with making intelligible strings the
+user/player has sent to grpg.
+
 > -- | Parse "host[:port]/selector" (leading gopher:// optional).
 > parseHostPortSel :: String -> Either String (String,String,String)
 > parseHostPortSel uri0 =
@@ -507,6 +519,15 @@ Best-effort cooperative room locks
 Presence + chat (“squeaks”)
 ===========================
 
+This section is devoted to the modification of room data through the player
+saying something (squeek) or simply being in the room (the requested Gopher
+URI).
+
+Room's Presence
+---------------
+
+Who is "here?"
+
 > -- | Heartbeat a user’s presence into a room (under lock).
 > touchPresence :: String -> String -> String -> String -> IO ()
 > touchPresence who h p s = withRoomLock h p s $ do
@@ -527,7 +548,12 @@ Presence + chat (“squeaks”)
 >                             let t = case reads ts of ((z,_):_) -> z; _ -> 0 :: Int
 >                             pure (n, now - t <= presenceTTL)) fs
 >     pure [n | (n,f) <- pairs, f]
-> 
+
+Room's Squeeks
+--------------
+
+Player's messages left in the room.
+
 > -- | Print the last N chat lines for the room (if any).
 > showChatTail :: String -> String -> String -> IO ()
 > showChatTail h p s = do
@@ -552,17 +578,24 @@ Presence + chat (“squeaks”)
 Fetch via curl (gopher://host:port/selector)
 ============================================
 
-> 
-> -- | Fetch a gopher resource using curl (silent, follows redirects).
+Request a Gopher URI (using `curl`) and return its contents (or an error).
+
 > fetchGopher :: String -> String -> String -> IO (Either String String)
 > fetchGopher host port sel = do
 >   let url = "gopher://" ++ host ++ ":" ++ port ++ sel
->   e <- try (readProcess "curl" ["-s", "--location", url] "") :: IO (Either SomeException String)
+>   e <- try (readProcess "curl" ["-s", "-g", "--location", url] "") :: IO (Either SomeException String)
 >   pure $ either (const (Left "fetch failed")) Right e
 > 
 
 Menu construction / rewriting
 =============================
+
+Since this game is basically a gamified Gopher proxy, this section is devoted
+to tools for both displaying and rewriting Gopher menus. Because we request a
+menu and then we have to rewrite the menu items/links so that they point to the
+proxy (so the user doesn't leave grpg when they click an item).
+
+Also some tools for generating menus in general.
 
 > -- | Build an informational “i” line for Gopher menus (safe for any text).
 > iLine :: String -> String
@@ -606,11 +639,27 @@ Menu construction / rewriting
 
 Deterministic loot + stats
 ==========================
+
+This section is a bit messy and has scope-creep, but loot == stats, so that's
+the rationale for now, basically.
   
+Helpers
+-------
+
+More abstract utility functions.
+
 > -- | Simple 32-bit-ish accumulator hash (no RNG dependency).
 > hash32 :: String -> Int
 > hash32 = foldl (\h c -> (h * 33 + fromEnum c) `mod` 2147483647) 5381
 > 
+> -- | Capitalize a single word (ASCII).
+> capitalize :: String -> String
+> capitalize [] = []
+> capitalize (c:cs) = toUpper c : map toLower cs
+
+Creation of Loot
+----------------
+
 > -- | Load dictionary words for loot naming (fallback to built-ins if missing).
 > loadDict :: IO [String]
 > loadDict = do
@@ -622,12 +671,8 @@ Deterministic loot + stats
 >   where
 >     good w = let v = filter isAlpha w in length v == length w && length w >= 3 && length w <= 12
 >     fallback = ["Gopher","Burrow","Trophy","Badge","Charm","Archive","Tunnel","Bit","Packet","Glyph","Badge","Talisman"]
-> 
-> -- | Capitalize a single word (ASCII).
-> capitalize :: String -> String
-> capitalize [] = []
-> capitalize (c:cs) = toUpper c : map toLower cs
-> 
+
+
 > -- | Pick which stat a room’s loot will grant (biased).
 > treasureStatKind :: String -> String
 > treasureStatKind rk =
@@ -665,7 +710,10 @@ Deterministic loot + stats
 >       ex <- doesFileExist fp
 >       unless ex $
 >         writeText fp (unlines ["name="++nm, kind++"=1", "src=room"])
-> 
+
+Stats (Based on Loot)
+---------------------
+
 > -- | Sum the player’s STR/DEF/LUCK from items in their bag.
 > sumStats :: String -> IO (Int,Int,Int)
 > sumStats you = do
@@ -682,7 +730,12 @@ Deterministic loot + stats
 >                   (k,'=':v) -> (k, readInt v)
 >                   _         -> ("",0)
 >     readInt v = case reads v of ((z,_):_) -> z; _ -> 0
-> 
+
+Loot-based Actions
+------------------
+
+Player performs the loot room command to take all of its treasures:
+
 > -- | Move all loot in room → player bag (under lock); print result.
 > doLoot :: String -> String -> String -> String -> IO ()
 > doLoot you h p s = withRoomLock h p s $ do
@@ -701,15 +754,47 @@ Deterministic loot + stats
 >                pure ()) fs
 >       putStrLn (iLine ("[grpg] looted " ++ show (length fs) ++ " item(s)."))
 >   renderMenu (sanitizeUser you) h p s
-> 
+
+Remove all of a player's loot from them and put it in the room, which happens when they die:
+
+> -- | Move all items from a player → room loot. Returns count moved.
+> dropAllToRoom :: String -> String -> String -> String -> IO Int
+> dropAllToRoom who h p s = withRoomLock h p s $ do
+>   let idir = userItemsDir who
+>       ldir = roomLootDir h p s
+>   createDirectoryIfMissing True ldir
+>   ok <- doesDirectoryExist idir
+>   if not ok then pure 0 else do
+>     fs <- listDirectory idir
+>     moved <- mapM (\f -> do
+>                      let src = idir </> f
+>                          dst = ldir </> f
+>                      r <- try (renameFile src dst) :: IO (Either SomeException ())
+>                      pure (either (const False) (const True) r)
+>                   ) fs
+>     pure (length (filter id moved))
+
+Attack Command
+--------------
+
+Player does the attack command, attacking another player. Player drops their
+loot when they die. It's worth noting that this is more like "initiate battle,"
+because the other player can attack you automatically.
+
 > -- | Attack another present user. Winner collects loser’s items onto the floor.
 > doAttack :: String -> String -> String -> String -> String -> IO ()
 > doAttack you h p s targetRaw = do
 >   let target = sanitizeUser targetRaw
 >   pres <- listPresent h p s
+
+A check is performed to see if the target the player wants to attack is actually in the room "right now":
+
 >   if target `notElem` pres
 >     then do putStrLn (iLine "[grpg] target not present."); renderMenu you h p s
 >     else do
+
+The math for stats in an attack calculation is simple and based entirely on loot. However, I must admit, the variable naming convention in this is atrocious.
+
 >       (as,ad,_) <- sumStats you
 >       (ds,dd,_) <- sumStats target
 >       let ahp0 = 5 + ad
@@ -719,6 +804,9 @@ Deterministic loot + stats
 >           rk   = h ++ ":" ++ p ++ s
 >           leadAtt = (abs (hash32 ("lead:"++rk++":"++you++":"++target)) `mod` 2) == 0
 >           (aw, _dw) = fight leadAtt ahp0 dhp0 adm ddm
+
+The battle was decided, now just handle the outcome (attacker won?):
+
 >       if aw
 >         then do n <- dropAllToRoom target h p s
 >                 appendLine (chatFile h p s) ("[combat] "++you++" defeated "++target
@@ -737,28 +825,15 @@ Deterministic loot + stats
 >       | d <= 0 = (True,  False)
 >       | lead   = fight False a (d - adm) adm ddm
 >       | otherwise = fight True (a - ddm) d adm ddm
-> 
-> -- | Move all items from a player → room loot. Returns count moved.
-> dropAllToRoom :: String -> String -> String -> String -> IO Int
-> dropAllToRoom who h p s = withRoomLock h p s $ do
->   let idir = userItemsDir who
->       ldir = roomLootDir h p s
->   createDirectoryIfMissing True ldir
->   ok <- doesDirectoryExist idir
->   if not ok then pure 0 else do
->     fs <- listDirectory idir
->     moved <- mapM (\f -> do
->                      let src = idir </> f
->                          dst = ldir </> f
->                      r <- try (renameFile src dst) :: IO (Either SomeException ())
->                      pure (either (const False) (const True) r)
->                   ) fs
->     pure (length (filter id moved))
-> 
+
+
 
 Rendering (room header, presence, stats, loot summary, then proxied body)
 =========================================================================
   
+Basically showing a room, which in part contains the Gopher URI which the
+player is at. Could be a text file or menu.
+
 > -- | Render the full proxied menu for a user in a room, with overlay info.
 > renderMenu :: String -> String -> String -> String -> IO ()
 > renderMenu you h p s = do
@@ -852,7 +927,6 @@ Commands (parsing + dispatch)
 No-room fallback (when user has no last room recorded)
 ======================================================
 
-> 
 > -- | Inform the user they have no current room and offer a starting link.
 > renderNoRoom :: String -> IO ()
 > renderNoRoom you = do
@@ -906,7 +980,7 @@ Verb runner (spawns loot on first visit; touches presence as needed)
 Main entrypoint
 ===============
 
-Finally!
+Finally! Where the game logic all starts. The CLI entrypoint!
 
 >
 > main :: IO ()
